@@ -4,10 +4,6 @@ import matplotlib.dates as mdates
 import seaborn as sns
 import collections
 import numpy as np
-import tensorflow as tf
-import tensorflow_probability as tfp
-from tensorflow_probability import distributions as tfd
-from tensorflow_probability import sts
 from pandas.plotting import register_matplotlib_converters
 
 register_matplotlib_converters()
