@@ -32,11 +32,7 @@ class STS_model():
         
         list_of_effects = list(filter(None.__ne__, list_of_effects))
 
-        # self.model = sts.Sum(components=[list_of_effects],
-        #                     observed_time_series=self.obs)
-        self.model = sts.Sum(components=[self.day_of_week,
-                                         self.month_of_yr,
-                                         self.residue],
+        self.model = sts.Sum(components=list_of_effects,
                             observed_time_series=self.obs)
     
     #@tf.function(experimental_compile=True)
@@ -46,19 +42,19 @@ class STS_model():
         self.num_steps = num_steps
         #self.optimizer = optimizer
         self.surrogate_posterior = self.variational_posterior()
-        self.elbo_loss_curve = tfp.vi.fit_surrogate_posterior(
-                            target_log_prob_fn = self.model.joint_log_prob(
-                            observed_time_series = self.obs),
-                            surrogate_posterior = self.surrogate_posterior,
-                            optimizer = tf.optimizers.Adam(learning_rate = self.lr),
-                            num_steps = self.num_steps)
+        self.elbo_loss_curve = \
+        tfp.vi.fit_surrogate_posterior(
+                    target_log_prob_fn = \
+                    self.model.joint_log_prob(observed_time_series = self.obs),
+                    surrogate_posterior = self.surrogate_posterior,
+                    optimizer = tf.optimizers.Adam(learning_rate = self.lr),
+                    num_steps = self.num_steps)
     
         return self.elbo_loss_curve
     
     def variational_posterior(self):
         return tfp.sts.build_factored_surrogate_posterior(model = self.model)
-        
-    
+            
     def day_of_week_effect(self):
         effect = sts.Seasonal(
                         num_seasons=7, num_steps_per_season=1,
