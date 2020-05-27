@@ -93,17 +93,18 @@ from statsmodels.tsa.api import ARIMA, SimpleExpSmoothing
 from statsmodels.tsa.stattools import adfuller, kpss
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-class Data_preprocessing():    
+class Data_Processing():    
     def __init__(self, data, **kwargs):
         super().__init__()
         self.kwargs = kwargs
+        self.data = data
         # sales columns
         self.sales_cols = ['vol_A', 'vol_B', 'vol_C']
         # rest of the columns
-        self.cat_cols = list(set(self.data.columns.values).difference(set(self.sales_col)))
-        self.data = self.add_diff(data)
+        self.cat_cols = list(set(self.data.columns.values).difference(set(self.sales_cols)))
+        self.data = self.add_diff(self.data)
         self.window=  self.kwargs['window']
-        self.train, self.test = self.data.iloc[:-window], self.data.iloc[-window:]
+        self.train, self.test = self.data.iloc[:-self.window], self.data.iloc[-self.window:]
         self.scale = self.kwargs['scale']
         self.scale_type = self.kwargs['scale_type']
         if self.scale:
@@ -129,9 +130,9 @@ class Data_preprocessing():
     def add_diff(self, data):
         for col in self.sales_cols:
             log_diff = pd.Series(np.log(data[col]).diff(), 
-                             name = 'log_diff'+str(col)).fillna(value=0)
+                             name = 'log_diff_'+str(col)).fillna(value=0)
             sq_diff = pd.Series(np.sqrt(data[col]).diff(),
-                             name = 'sq_diff'+str(col)).fillna(value=0)
+                             name = 'sq_diff_'+str(col)).fillna(value=0)
             data = pd.concat([data, log_diff, sq_diff], axis = 1)
         return data
             
