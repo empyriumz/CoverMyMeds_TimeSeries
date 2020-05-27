@@ -145,11 +145,12 @@ class Stats_model():
     """Generic time series prediction model template using statsmdodels api
     """    
     def __init__(self, data, **kwargs):
+        #super().__init__(*data, **kwargs)
         """This function initialize with train test split according 
         to the designated datatype and future window
 
         Arguments:
-            [pd.DataFrame] sales data
+        data [Data_Pipe object] sales data
              
         Keyword Arguments:
             col {str} -- [select the desired target data for the time series] (default: {'vol_A'})
@@ -157,86 +158,83 @@ class Stats_model():
         Raises:
             TypeError: [only three datatypes are allowed]
         """
-        # self.data = data.data
-        self.para = kwargs            
-        self.cat_cols = ['day_of_week', 'is_weekday', 'is_workday', 'is_holiday']
-        self.train, self.test = data.train, data.test
-        self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
-        self.smooth = self.para['smooth']
-        if self.smooth:
+        self.para = kwargs           
+        self.cat_cols = data.cat_cols
+        self.target = self.para['target']
+        self.dtype = self.para['dtype']
+        self.train, self.test = data.train[self.target], data.test[self.target]
+        #self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
+        if self.para['smooth']:
             self.train = self.exp_avg()
         self.model = None
                  
     def fit_model(self):
-        self.fit = self.model.fit()
+        try:
+            self.fit = self.model.fit()
+        except:
+            print("Unable to fit with current parameters")
     
     def exp_avg(self, month = 6, smooth_level = 0.2):
-        """Exponential averaging the price data
-
-        Arguments:
-        data {pd.DataFrame} -- raw sales data for smoothing
+        """Exponential averaging the numerical data
 
         Keyword Arguments:
             month {int} -- Time span for each exponential average (default: {6})
             smooth_level {float} -- Hyperparameter for average decay (default : {0.2})
             smaller value means slower decay (more weight on older data)
         Returns:
-            pd.DataFrame -- Exponential averaged sales data
+            pd.Series -- Exponential averaged sales data
         """        
         span = month * 30
         i = 0
-        tmp = pd.DataFrame(index=self.train.index, columns=self.numeric_cols)    
-        for col in self.numeric_cols:
-            smooth_data = []
-            while i < len(self.train):
-                split_data = self.train[col].iloc[i:i+span]
-                es = SimpleExpSmoothing(split_data)
-                es_fit = es.fit(smoothing_level=smooth_level, optimized=False)
-                smooth_data.append(es_fit.fittedvalues)
-                i += span
-                #flat_data = [item for sublist in smooth_data for item in sublist]
-                tmp[col] = pd.concat(smooth_data)
-        #tmp.index = self.train.index
-        train = pd.concat([tmp, self.train[self.cat_cols]], axis = 1)
-        return train
+        fitted_data = []
+        while i < len(self.train):
+            split_data = self.train.iloc[i:i+span]
+            es = SimpleExpSmoothing(split_data)
+            es_fit = es.fit(smoothing_level=smooth_level, optimized=False)
+            fitted_data.append(es_fit.fittedvalues)
+            i += span
+        smooth_data = pd.concat(fitted_data)
+        return smooth_data
         
-    def stationary_test(self, col = 'log_diff_vol_A'):
+    def stationary_test(self):
         """Perform two statistical test to 
         determine if the time series is stationary or not
         """
-        adftest = adfuller(self.train[col], autolag='AIC')
+        adftest = adfuller(self.train, autolag='AIC')
         self.adfoutput = pd.Series(adftest[0:4], index=[
             'Test Statistic', 'p-value', '#Lags Used', 'Number of Observations Used'])
         for key, value in adftest[4].items():
             self.adfoutput['Critical Value (%s)' % key] = value
 
-        kpsstest = kpss(self.train[col], regression='c', nlags=None)
+        kpsstest = kpss(self.train, regression='c', nlags=None)
         self.kpss_output = pd.Series(kpsstest[0:3], index=[
             'Test Statistic', 'p-value', 'Lags Used'])
         for key, value in kpsstest[3].items():
                 self.kpss_output['Critical Value (%s)' % key] = value
         if self.adfoutput['p-value'] <= 0.01 and self.kpss_output['p-value'] > 0.05:
             self.stationarity = 'Stationary'
-            print('the time series {} is stationary!'.format(col))
+            print('the time series {} is stationary!'.format(self.target))
         elif self.adfoutput['p-value'] > 0.01 and self.kpss_output['p-value'] <= 0.05:
-            print('the time series {} is non-stationary!'.format(col))
+            print('the time series {} is non-stationary!'.format(self.target))
             self.stationarity = 'Non-stationary'
         elif self.adfoutput['p-value'] > 0.01 and self.kpss_output['p-value'] > 0.05:
             self.stationarity = 'Trend-stationary'
-            print("the time series {} is trend-stationary".format(col))
+            print("the time series {} is trend-stationary".format(self.target))
         else:
             self.stationarity = 'Difference stationary'
-            print("the time series {} is difference stationary.".format(col))
+            print("the time series {} is difference stationary.".format(self.target))
         
 class ARIMA_model(Stats_model):
     
-    def __init__(self, **kwargs):
-        super(Stats_model).__init__(**kwargs)        
+    def __init__(self, data, **kwargs):
+        super().__init__(data, **kwargs)        
         self.all_data = None
-        self.para = kwargs
-        self.target = self.para['target']
         # exogenous variables which may affect the prediction of target
-        self.exog = self.para['external']
+        # these can either be categorical variabls or sales data of different customers
+        try:
+            self.exog = data.train[self.para['external']]
+        except:
+            self.exog = None
         
     def build_model(self):
         """Build ARIMA model with 3 hyperparameters
@@ -250,7 +248,10 @@ class ARIMA_model(Stats_model):
         self.p = self.para['p']
         self.d = self.para['d']
         self.q = self.para['q']
-        self.model = ARIMA(self.train[self.target], order=(self.p, self.d, self.q))
+        self.model = ARIMA(self.train, order=(self.p, self.d, self.q), exog = self.exog)
+       
+    # def predict(self):
+    #     self.predict = self.model.predict(exog=self.exog, typ='levels')
         
     def forecast(self):
         """Make forecast using fitted model.
@@ -260,7 +261,7 @@ class ARIMA_model(Stats_model):
             [ARIMAResults.forecast] -- [np.array with forecast values and bounds]
         """
         window = len(self.test)
-        return self.fit.forecast(window)
+        return self.fit.forecast(window, exog=self.exog)
     
     def fitted_value(self):
         """a workaround for getting the original fitted data from statsmodel api
@@ -269,8 +270,9 @@ class ARIMA_model(Stats_model):
             [pd.DataFrame] -- [Extracted values from 
             the Figure plus the error rate 
             when fitting the training set]
-        """        
-        fit_data = self.fit.predict(typ='levels')
+        """
+        # typ='levels' means return data with original value instead of differenced data   
+        fit_data = self.fit.predict(exog=self.exog, typ='levels')
         dates = self.train.index
         combine_data = {'train_data': self.train,
                         'fit_data': fit_data}
