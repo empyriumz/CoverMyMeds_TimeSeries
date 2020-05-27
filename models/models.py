@@ -6,7 +6,7 @@ from tensorflow_probability import distributions as tfd
 from tensorflow_probability import sts
 import matplotlib.dates as mdates
 
-class STS_model():
+class STS():
     def __init__(self, obs, external_obs = None):
         #super().__init__()
         self.obs = obs
@@ -93,7 +93,7 @@ from statsmodels.tsa.api import ARIMA, SimpleExpSmoothing
 from statsmodels.tsa.stattools import adfuller, kpss
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-class Data_Processing():    
+class Data_Pipe():    
     def __init__(self, data, **kwargs):
         super().__init__()
         self.kwargs = kwargs
@@ -119,13 +119,14 @@ class Data_Processing():
             scaler = MinMaxScaler()
         else:
             scaler = StandardScaler()
-        scaled_data = []
         for col in self.sales_cols:
-            tmp = pd.Series(scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel(), 
-                            name = str(col))
-            scaled_data = pd.concat([tmp])
-        scaled_data.index = data.index
-        return pd.concat([scaled_data, data[self.cat_cols]], axis = 1)
+            tmp = pd.DataFrame(scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel(), 
+                              columns = [str(col)+'_scaled'], index = data.index)
+            data = data.join(tmp)
+        #scaled_data = pd.DataFrame(scaled_data, index = data.index)
+        #scaled_data.index = data.index
+        data_scaled = data.drop(columns = self.sales_cols)
+        return data_scaled
     
     def add_diff(self, data):
         for col in self.sales_cols:
@@ -169,12 +170,11 @@ class Data_Processing():
         
         return data_smooth
 
-
                 
 class Stats_model():
     """Generic time series prediction model template using statsmdodels api
     """    
-    def __init__(self, data, col = 'vol_A', window = 30, scale = True, smooth = False):
+    def __init__(self, data):
         """This function initialize with train test split according 
         to the designated datatype and future window
 
@@ -184,13 +184,11 @@ class Stats_model():
         Keyword Arguments:
             col {str} -- [select the desired target data for the time series] (default: {'vol_A'})
             window {int} -- [the future forecast window in days] (default: {30})
-            scale {bool} -- [min-max scaler to transform the data] (default: True)
-            smooth {bool} -- [Apply simple exponential averaging] (default: False)
         Raises:
             TypeError: [only three datatypes are allowed]
         """
         self.data = data        
-        self.train, self.test = self.data.iloc[:-window], self.data.iloc[-window:]
+        self.train, self.test = self.data.train, self.data.test
         self.smooth = smooth
         train = self.exp_avg()
         if self.smooth:
