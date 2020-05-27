@@ -5,6 +5,7 @@ import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
 from tensorflow_probability import sts
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 
 class STS():
     def __init__(self, obs, external_obs = None):
@@ -100,11 +101,15 @@ class Data_Pipe():
         self.data = data
         # sales columns
         self.sales_cols = ['vol_A', 'vol_B', 'vol_C']
-        # rest of the columns
+        # categorical columns
         self.cat_cols = list(set(self.data.columns.values).difference(set(self.sales_cols)))
         self.data = self.add_diff(self.data)
+        # updata numerical columns after adding log and sq diff data
+        self.numeric_cols = list(set(self.data.columns.values).difference(set(self.cat_cols)))
         self.window = self.para['window']
-        self.train, self.test = self.data.iloc[:-self.window], self.data.iloc[-self.window:]
+        # for test data, keep numerical variables only
+        self.train, self.test = self.data.iloc[:-self.window], \
+                                self.data.drop(columns = self.cat_cols).iloc[-self.window:]
         self.scale = self.para['scale']
         self.scale_type = self.para['scale_type']
         if self.scale:
@@ -119,11 +124,11 @@ class Data_Pipe():
         else:
             raise Exception("Only two scaler available:\
                             'max_min' and 'standard' ")
-        for col in self.sales_cols:
+        for col in self.numeric_cols:
             tmp = pd.DataFrame(scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel(), 
                               columns = [str(col)+'_scaled'], index = data.index)
             data = data.join(tmp)
-        data_scaled = data.drop(columns = self.sales_cols)
+        data_scaled = data.drop(columns = self.numeric_cols)
         return data_scaled
     
     def add_diff(self, data):
@@ -152,14 +157,14 @@ class Stats_model():
         Raises:
             TypeError: [only three datatypes are allowed]
         """
-        self.data = data.data
-        self.para = kwargs      
-        self.train, self.test = data.train, data.test        
-        self.cat_cols = ['day_of_week',	'is_weekday', 'is_workday',	'is_holiday']
-        self.numeric_cols = list(set(self.data.columns.values).difference(set(self.cat_cols)))
+        # self.data = data.data
+        self.para = kwargs            
+        self.cat_cols = ['day_of_week', 'is_weekday', 'is_workday', 'is_holiday']
+        self.train, self.test = data.train, data.test
+        self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
         self.smooth = self.para['smooth']
         if self.smooth:
-            self.train = self.exp_avg(self.train)
+            self.train = self.exp_avg()
         self.model = None
                  
     def fit_model(self):
@@ -179,7 +184,8 @@ class Stats_model():
             pd.DataFrame -- Exponential averaged sales data
         """        
         span = month * 30
-        i = 0        
+        i = 0
+        tmp = pd.DataFrame(index=self.train.index, columns=self.numeric_cols)    
         for col in self.numeric_cols:
             smooth_data = []
             while i < len(self.train):
@@ -188,34 +194,186 @@ class Stats_model():
                 es_fit = es.fit(smoothing_level=smooth_level, optimized=False)
                 smooth_data.append(es_fit.fittedvalues)
                 i += span
-            self.train.col = pd.concat(smooth_data)
-
-        return self.train
+                #flat_data = [item for sublist in smooth_data for item in sublist]
+                tmp[col] = pd.concat(smooth_data)
+        #tmp.index = self.train.index
+        train = pd.concat([tmp, self.train[self.cat_cols]], axis = 1)
+        return train
         
-    def stationary_test(self):
+    def stationary_test(self, col = 'log_diff_vol_A'):
         """Perform two statistical test to 
         determine if the time series is stationary or not
         """
-        adftest = adfuller(self.train, autolag='AIC')
+        adftest = adfuller(self.train[col], autolag='AIC')
         self.adfoutput = pd.Series(adftest[0:4], index=[
             'Test Statistic', 'p-value', '#Lags Used', 'Number of Observations Used'])
         for key, value in adftest[4].items():
             self.adfoutput['Critical Value (%s)' % key] = value
 
-        kpsstest = kpss(self.train, regression='c', nlags=None)
+        kpsstest = kpss(self.train[col], regression='c', nlags=None)
         self.kpss_output = pd.Series(kpsstest[0:3], index=[
             'Test Statistic', 'p-value', 'Lags Used'])
         for key, value in kpsstest[3].items():
                 self.kpss_output['Critical Value (%s)' % key] = value
         if self.adfoutput['p-value'] <= 0.01 and self.kpss_output['p-value'] > 0.05:
             self.stationarity = 'Stationary'
-            print('the time series is stationary!')
+            print('the time series {} is stationary!'.format(col))
         elif self.adfoutput['p-value'] > 0.01 and self.kpss_output['p-value'] <= 0.05:
-            print('the time series is non-stationary!')
+            print('the time series {} is non-stationary!'.format(col))
             self.stationarity = 'Non-stationary'
         elif self.adfoutput['p-value'] > 0.01 and self.kpss_output['p-value'] > 0.05:
             self.stationarity = 'Trend-stationary'
-            print("the time series is trend-stationary")
+            print("the time series {} is trend-stationary".format(col))
         else:
             self.stationarity = 'Difference stationary'
-            print("the time series is difference stationary.")
+            print("the time series {} is difference stationary.".format(col))
+        
+class ARIMA_model(Stats_model):
+    
+    def __init__(self, **kwargs):
+        super(Stats_model).__init__(**kwargs)        
+        self.all_data = None
+        self.para = kwargs
+        self.target = self.para['target']
+        # exogenous variables which may affect the prediction of target
+        self.exog = self.para['external']
+        
+    def build_model(self):
+        """Build ARIMA model with 3 hyperparameters
+        See https://en.wikipedia.org/wiki/Autoregressive_integrated_moving_average
+        for detailed information
+        Keyword Arguments:
+            p {int} -- [number of time lags] (default: {4})
+            d {int} -- [degree of differencing] (default: {0})
+            q {int} -- [order of the moving-average model] (default: {3})
+        """        
+        self.p = self.para['p']
+        self.d = self.para['d']
+        self.q = self.para['q']
+        self.model = ARIMA(self.train[self.target], order=(self.p, self.d, self.q))
+        
+    def forecast(self):
+        """Make forecast using fitted model.
+        The forecasting window matches the test data.
+
+        Returns:
+            [ARIMAResults.forecast] -- [np.array with forecast values and bounds]
+        """
+        window = len(self.test)
+        return self.fit.forecast(window)
+    
+    def fitted_value(self):
+        """a workaround for getting the original fitted data from statsmodel api
+
+        Returns:
+            [pd.DataFrame] -- [Extracted values from 
+            the Figure plus the error rate 
+            when fitting the training set]
+        """        
+        fit_data = self.fit.predict(typ='levels')
+        dates = self.train.index
+        combine_data = {'train_data': self.train,
+                        'fit_data': fit_data}
+        return pd.DataFrame(combine_data, index=dates)
+        
+    def plot_fitted(self):
+        """Use built-in method to plot
+        """        
+        self.fit.plot_predict()
+    
+    def forecast_test(self):
+        """Gather forecast data and test data
+
+        Returns:
+            [pd.DataFrame] -- The dataframe contains both test data
+            and relevant forecast information: 
+                    * forecast values
+                    * forecast bounds
+                    * error rate
+        """        
+        pred = self.forecast()
+        combine_data = {'train_data': self.test.values,
+                'fit_data': pred[0]}
+        return pd.DataFrame(combine_data, index=self.test.index)
+    
+    def gather_all_data(self, convert = True):
+        """Gather all data, including training, test, prediction, error rate,
+        prediction bounds etc. into one pandas DataFrame               
+
+        Keyword Arguments:
+            convert {bool} -- [If convert is true, the fitted data will 
+            be converted to the original values] (default: {True})
+        """               
+        previous_data = self.fitted_value()
+        future_data = self.forecast_test()               
+        combine_data = pd.concat([previous_data, future_data], axis = 0)
+        if convert:
+            combine_data = self.convert_data(combine_data)
+        
+        diff = combine_data['train_data'] - combine_data['fit_data']
+        error_rate = pd.DataFrame(100 * np.abs(diff/combine_data['train_data'])
+                                ,columns=['error_rate'])
+        # mse is only calculated for test data
+        self.mse = np.sum(diff.iloc[-len(self.test):]**2)/len(self.test)
+        self.all_data = pd.concat([combine_data, error_rate], axis = 1)
+            
+        return self.all_data
+    
+    def convert_data(self, data):
+        """Convert the transformed data back to original form
+
+        Arguments:
+            data {pd.DataFrame} -- dataframe to be transformed
+
+        Returns:
+            [pd.DataFrame] -- Transformed data
+        """        
+        if self.dtype == 'log_diff':
+            for col in data.columns:
+                    data[col] = np.exp(data[col].cumsum())
+        elif self.dtype == 'sq_diff':
+            for col in data.columns:
+                    data[col] = (data[col].cumsum()+1)**2
+            else:
+                pass
+        return data
+        
+    
+    def plot_data(self, plot_all = True, plot_error = False, convert = True):
+        """Plot both the fitted and train data
+
+        Keyword Arguments:
+            plot_all {bool} -- [plot includes the training set;
+            otherwise only test set and forecast will be plotted] (default: {True})
+            convert {bool} -- [convert the data to original scale]
+            plot_error {bool} -- [plot includes the error rate] (default: {False})
+        """
+        self.gather_all_data(convert)
+        if plot_all: # plot data of all range
+            data = self.all_data
+        else:
+            # plot forecast part only
+            data = self.all_data.iloc[-len(self.test):]
+        
+        dates = data.index
+        _, ax_1 = plt.subplots(figsize=(14, 7))
+        ax_1.plot(dates, data['fit_data'],
+                  'r', label="Fitted and Forecast Values")
+        ax_1.plot(dates, data['train_data'], label="train Values")
+        # ax_1.fill_between(dates.values, data['lower_bound'],
+        #                   data['upper_bound'], color='#ADCCFF', alpha='0.6')
+        ax_1.set_title('S&P 500 Price', fontsize=18)
+        ax_1.set_xlabel('Date', fontsize=18, fontfamily='sans-serif')
+        ax_1.set_ylabel('Price', fontsize='x-large')
+        ax_1.legend(prop={'size': 15})
+        
+        if plot_error:
+            ax_2 = ax_1.twinx()  # plot error rate using the same x-axis
+            ax_2.set_ylabel('Error Rate %', color='orange', fontsize=18)
+            ax_2.plot(dates, data['error_rate'],
+                        color='orange', label="Error Rate %")
+            ax_2.set_ylim(bottom = 0, top = 30)
+            ax_2.legend(prop={'size': 15})
+        # plt.savefig('figs/model_{}_type_{}'.format(self.dtype, plot_all), 
+        #             dpi=400)
+        plt.show()
