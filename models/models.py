@@ -96,35 +96,33 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 class Data_Pipe():    
     def __init__(self, data, **kwargs):
         super().__init__()
-        self.kwargs = kwargs
+        self.para = kwargs
         self.data = data
         # sales columns
         self.sales_cols = ['vol_A', 'vol_B', 'vol_C']
         # rest of the columns
         self.cat_cols = list(set(self.data.columns.values).difference(set(self.sales_cols)))
         self.data = self.add_diff(self.data)
-        self.window=  self.kwargs['window']
+        self.window = self.para['window']
         self.train, self.test = self.data.iloc[:-self.window], self.data.iloc[-self.window:]
-        self.scale = self.kwargs['scale']
-        self.scale_type = self.kwargs['scale_type']
+        self.scale = self.para['scale']
+        self.scale_type = self.para['scale_type']
         if self.scale:
             self.train, self.test = self.data_scaler(self.train, type = self.scale_type), \
                                     self.data_scaler(self.test, type = self.scale_type)
-        self.smooth = self.kwargs['smooth']
-        if self.smooth:
-            self.train = self.exp_avg(self.train)
 
     def data_scaler(self, data, type = 'max_min'):
         if type == 'max_min':
             scaler = MinMaxScaler()
-        else:
+        elif type == 'standard':
             scaler = StandardScaler()
+        else:
+            raise Exception("Only two scaler available:\
+                            'max_min' and 'standard' ")
         for col in self.sales_cols:
             tmp = pd.DataFrame(scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel(), 
                               columns = [str(col)+'_scaled'], index = data.index)
             data = data.join(tmp)
-        #scaled_data = pd.DataFrame(scaled_data, index = data.index)
-        #scaled_data.index = data.index
         data_scaled = data.drop(columns = self.sales_cols)
         return data_scaled
     
@@ -137,7 +135,36 @@ class Data_Pipe():
             data = pd.concat([data, log_diff, sq_diff], axis = 1)
         return data
             
-            
+                
+class Stats_model():
+    """Generic time series prediction model template using statsmdodels api
+    """    
+    def __init__(self, data, **kwargs):
+        """This function initialize with train test split according 
+        to the designated datatype and future window
+
+        Arguments:
+            [pd.DataFrame] sales data
+             
+        Keyword Arguments:
+            col {str} -- [select the desired target data for the time series] (default: {'vol_A'})
+            window {int} -- [the future forecast window in days] (default: {30})
+        Raises:
+            TypeError: [only three datatypes are allowed]
+        """
+        self.data = data.data
+        self.para = kwargs      
+        self.train, self.test = data.train, data.test        
+        self.cat_cols = ['day_of_week',	'is_weekday', 'is_workday',	'is_holiday']
+        self.numeric_cols = list(set(self.data.columns.values).difference(set(self.cat_cols)))
+        self.smooth = self.para['smooth']
+        if self.smooth:
+            self.train = self.exp_avg(self.train)
+        self.model = None
+                 
+    def fit_model(self):
+        self.fit = self.model.fit()
+    
     def exp_avg(self, month = 6, smooth_level = 0.2):
         """Exponential averaging the price data
 
@@ -153,7 +180,7 @@ class Data_Pipe():
         """        
         span = month * 30
         i = 0        
-        for col in self.sales_cols:
+        for col in self.numeric_cols:
             smooth_data = []
             while i < len(self.train):
                 split_data = self.train[col].iloc[i:i+span]
@@ -161,46 +188,9 @@ class Data_Pipe():
                 es_fit = es.fit(smoothing_level=smooth_level, optimized=False)
                 smooth_data.append(es_fit.fittedvalues)
                 i += span
-            smooth_data = pd.concat(smooth_data)
-            log_diff = pd.Series(np.log(smooth_data).diff()).fillna(value=0)
-            sq_diff = pd.Series(np.sqrt(smooth_data).diff()).fillna(value=0)
-            dic = {str(col): smooth_data, 'log_diff_'+str(col): log_diff, 
-                   'sq_diff_'+str(col): sq_diff}
-            data_smooth = pd.concat([pd.DataFrame(data = dic)], axis = 1)
-        
-        return data_smooth
+            self.train.col = pd.concat(smooth_data)
 
-                
-class Stats_model():
-    """Generic time series prediction model template using statsmdodels api
-    """    
-    def __init__(self, data):
-        """This function initialize with train test split according 
-        to the designated datatype and future window
-
-        Arguments:
-            [pd.DataFrame] sales data
-             
-        Keyword Arguments:
-            col {str} -- [select the desired target data for the time series] (default: {'vol_A'})
-            window {int} -- [the future forecast window in days] (default: {30})
-        Raises:
-            TypeError: [only three datatypes are allowed]
-        """
-        self.data = data        
-        self.train, self.test = self.data.train, self.data.test
-        self.smooth = smooth
-        train = self.exp_avg()
-        if self.smooth:
-            self.train = self.exp_avg()
-        self.col = col
-        assert self.col in ['vol_A', 'vol_B', 'vol_C'], \
-        "Only support three datatypes: 'vol_A', 'vol_B' and 'vol_C'"
-        self.train, self.test = self.train[self.col], self.test[self.col]
-        self.model = None
-                 
-    def fit_model(self):
-        self.fit = self.model.fit()
+        return self.train
         
     def stationary_test(self):
         """Perform two statistical test to 
