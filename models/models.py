@@ -235,9 +235,12 @@ class Stats_model():
 class ARIMA_model(Stats_model):
     
     def __init__(self, data, **kwargs):
-        super().__init__(data, **kwargs)        
-        # exogenous variables which may affect the prediction of target
-        # these can either be categorical variabls or sales data of different customers
+        """Build ARIMA model which optionally includes exogenous variables, 
+         they can either be categorical variables or sales data of different customers
+        Arguments:
+            data {[type]} -- Data_Pipe object
+        """        
+        super().__init__(data, **kwargs)
         try:
             self.exog_train = data.train[self.para['external']]
             self.exog_all = data.data[self.para['external']]
@@ -249,10 +252,6 @@ class ARIMA_model(Stats_model):
         """Build ARIMA model with 3 hyperparameters
         See https://en.wikipedia.org/wiki/Autoregressive_integrated_moving_average
         for detailed information
-        Keyword Arguments:
-            p {int} -- [number of time lags] (default: {4})
-            d {int} -- [degree of differencing] (default: {0})
-            q {int} -- [order of the moving-average model] (default: {3})
         """        
         self.p = self.para['p']
         self.d = self.para['d']
