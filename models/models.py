@@ -101,6 +101,8 @@ class Data_Pipe():
         self.data = data
         # sales columns
         self.sales_cols = ['vol_A', 'vol_B', 'vol_C']
+        # keep the initial values for later inverse transform to original data
+        self.initial_values = self.data[self.sales_cols].iloc[0]
         # categorical columns
         self.cat_cols = list(set(self.data.columns.values).difference(set(self.sales_cols)))
         self.data = self.add_diff(self.data)
@@ -150,19 +152,25 @@ class Stats_model():
         to the designated datatype and future window
 
         Arguments:
-        data [Data_Pipe object] sales data
+        data [Data_Pipe object]
              
         Keyword Arguments:
-            col {str} -- [select the desired target data for the time series] (default: {'vol_A'})
-            window {int} -- [the future forecast window in days] (default: {30})
         Raises:
             TypeError: [only three datatypes are allowed]
         """
-        self.para = kwargs           
+        self.para = kwargs
+        self.all_data = data      
         self.cat_cols = data.cat_cols
-        self.target = self.para['target']
+        # set None for dtype when modeling with original values
         self.dtype = self.para['dtype']
-        self.train, self.test = data.train[self.target], data.test[self.target]
+        try:
+            self.target = self.dtype + str('_') + self.para['target']
+        except:
+            # if using original data, dtype will be None
+            self.target = self.para['target']
+        # extract initial values for later inverse transform from log_diff and sq_diff 
+        self.initial_value = self.all_data.initial_values[self.para['target']]       
+        self.train, self.test = self.all_data.train[self.target], self.all_data.test[self.target]
         #self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
         if self.para['smooth']:
             self.train = self.exp_avg()
@@ -228,13 +236,14 @@ class ARIMA_model(Stats_model):
     
     def __init__(self, data, **kwargs):
         super().__init__(data, **kwargs)        
-        self.all_data = None
         # exogenous variables which may affect the prediction of target
         # these can either be categorical variabls or sales data of different customers
         try:
-            self.exog = data.train[self.para['external']]
+            self.exog_train = data.train[self.para['external']]
+            self.exog_all = data.data[self.para['external']]
         except:
-            self.exog = None
+            self.exog_train = None
+            self.exog_all = None
         
     def build_model(self):
         """Build ARIMA model with 3 hyperparameters
@@ -248,82 +257,46 @@ class ARIMA_model(Stats_model):
         self.p = self.para['p']
         self.d = self.para['d']
         self.q = self.para['q']
-        self.model = ARIMA(self.train, order=(self.p, self.d, self.q), exog = self.exog)
+        self.model = ARIMA(self.train, order=(self.p, self.d, self.q), 
+                           exog = self.exog_train)
        
-    # def predict(self):
-    #     self.predict = self.model.predict(exog=self.exog, typ='levels')
-        
-    def forecast(self):
-        """Make forecast using fitted model.
-        The forecasting window matches the test data.
-
-        Returns:
-            [ARIMAResults.forecast] -- [np.array with forecast values and bounds]
-        """
-        window = len(self.test)
-        return self.fit.forecast(window, exog=self.exog)
-    
-    def fitted_value(self):
-        """a workaround for getting the original fitted data from statsmodel api
-
-        Returns:
-            [pd.DataFrame] -- [Extracted values from 
-            the Figure plus the error rate 
-            when fitting the training set]
-        """
-        # typ='levels' means return data with original value instead of differenced data   
-        fit_data = self.fit.predict(exog=self.exog, typ='levels')
-        dates = self.train.index
-        combine_data = {'train_data': self.train,
-                        'fit_data': fit_data}
-        return pd.DataFrame(combine_data, index=dates)
-        
-    def plot_fitted(self):
-        """Use built-in method to plot
-        """        
-        self.fit.plot_predict()
-    
-    def forecast_test(self):
-        """Gather forecast data and test data
-
-        Returns:
-            [pd.DataFrame] -- The dataframe contains both test data
-            and relevant forecast information: 
-                    * forecast values
-                    * forecast bounds
-                    * error rate
-        """        
-        pred = self.forecast()
-        combine_data = {'train_data': self.test.values,
-                'fit_data': pred[0]}
-        return pd.DataFrame(combine_data, index=self.test.index)
-    
-    def gather_all_data(self, convert = True):
-        """Gather all data, including training, test, prediction, error rate,
-        prediction bounds etc. into one pandas DataFrame               
+    def get_prediction(self, convert = True):
+        """Gather all data, including training, test, prediction, 
+        error rate, etc. into one pandas DataFrame           
 
         Keyword Arguments:
             convert {bool} -- [If convert is true, the fitted data will 
             be converted to the original values] (default: {True})
-        """               
-        previous_data = self.fitted_value()
-        future_data = self.forecast_test()               
-        combine_data = pd.concat([previous_data, future_data], axis = 0)
-        if convert:
-            combine_data = self.convert_data(combine_data)
-        
-        diff = combine_data['train_data'] - combine_data['fit_data']
-        error_rate = pd.DataFrame(100 * np.abs(diff/combine_data['train_data'])
-                                ,columns=['error_rate'])
-        # mse is only calculated for test data
-        self.mse = np.sum(diff.iloc[-len(self.test):]**2)/len(self.test)
-        self.all_data = pd.concat([combine_data, error_rate], axis = 1)
-            
-        return self.all_data
-    
-    def convert_data(self, data):
-        """Convert the transformed data back to original form
 
+        Returns:
+            None
+        """        
+        # typ='levels'return data with original value instead of differenced data
+        fit_data = self.fit.predict(start = self.train.index[0],
+                                          end = self.test.index[-1],
+                                          exog = self.exog_all, typ='levels')       
+
+        fit_data = pd.DataFrame(fit_data, columns=['fit_data'])
+        if convert:
+            fit_data = self.convert_data(fit_data)
+        real_data = pd.Series(self.all_data.data[self.para['target']], name='real_data')
+        combine_data = pd.concat([fit_data, real_data], axis = 1)
+        diff = combine_data['real_data'] - combine_data['fit_data']
+        self.error_rate = pd.Series(100 * np.abs(diff/combine_data['real_data']),
+                                 name = 'error_rate')
+        self.combine_data = pd.concat([combine_data, self.error_rate], axis=1)
+        # mse only includes test errors
+        self.mse = np.sum(diff.iloc[-len(self.test):]**2)/len(self.test)
+        if self.dtype == None:
+            # call forecast method for obtaining uncertainty estimation
+            self.forecast()
+            self.combine_data = pd.concat([self.combine_data, self.upper_bound,
+                                          self.lower_bound, self.std_err], axis=1)
+                   
+    def convert_data(self, data):
+        """
+        helper method for recover log and sq diff transformed 
+        data back to original values 
         Arguments:
             data {pd.DataFrame} -- dataframe to be transformed
 
@@ -332,14 +305,33 @@ class ARIMA_model(Stats_model):
         """        
         if self.dtype == 'log_diff':
             for col in data.columns:
-                    data[col] = np.exp(data[col].cumsum())
+                    data[col] = np.exp(data[col].cumsum()+np.log(self.initial_value))
         elif self.dtype == 'sq_diff':
             for col in data.columns:
-                    data[col] = (data[col].cumsum()+1)**2
-            else:
-                pass
-        return data
-        
+                    data[col] = (data[col].cumsum()+np.sqrt(self.initial_value))**2
+        else:
+            pass
+        return data 
+             
+    def forecast(self):
+        """Make forecast using fitted model.
+        The forecasting window matches the test window.
+        Since the forecast values can be obtained from get_prediction() method,
+        this method is only for obtaining uncertainty estimation. Note the estimation
+        only makes sense if the incoming data is original type, i.e., dtype=None
+        Returns:
+            None
+        """
+        window = len(self.test)
+        forecast_data = self.fit.forecast(window, exog=self.exog_all[-len(self.test):])
+        self.upper_bound = forecast_data[2][:, 1]
+        self.lower_bound = forecast_data[2][:, 0]
+        self.std_err = forecast_data[1]
+            
+    def plot_fitted(self):
+        """Use built-in method to plot
+        """        
+        self.fit.plot_predict()
     
     def plot_data(self, plot_all = True, plot_error = False, convert = True):
         """Plot both the fitted and train data
@@ -350,32 +342,43 @@ class ARIMA_model(Stats_model):
             convert {bool} -- [convert the data to original scale]
             plot_error {bool} -- [plot includes the error rate] (default: {False})
         """
-        self.gather_all_data(convert)
+        try:
+            self.combine_data
+        except:
+            self.get_prediction()
         if plot_all: # plot data of all range
-            data = self.all_data
+            date_range = self.all_data.data.index
+            real_data = self.all_data.data[self.para['target']]
+            fit_data = self.combine_data['fit_data']           
         else:
             # plot forecast part only
-            data = self.all_data.iloc[-len(self.test):]
+            date_range = self.test.index
+            real_data = self.all_data.data[self.para['target']].iloc[-len(self.test):]
+            fit_data = self.combine_data['fit_data'].iloc[-len(self.test):]       
         
-        dates = data.index
         _, ax_1 = plt.subplots(figsize=(14, 7))
-        ax_1.plot(dates, data['fit_data'],
-                  'r', label="Fitted and Forecast Values")
-        ax_1.plot(dates, data['train_data'], label="train Values")
-        # ax_1.fill_between(dates.values, data['lower_bound'],
-        #                   data['upper_bound'], color='#ADCCFF', alpha='0.6')
-        ax_1.set_title('S&P 500 Price', fontsize=18)
-        ax_1.set_xlabel('Date', fontsize=18, fontfamily='sans-serif')
-        ax_1.set_ylabel('Price', fontsize='x-large')
+        ax_1.plot(date_range, fit_data, 'r',
+                  label="Fitted and Forecast Values")
+        ax_1.plot(date_range, real_data, label="Real Values")
+        if self.dtype == None:
+            ax_1.fill_between(self.test.index, self.lower_bound, self.upper_bound,                             
+                            color='#ADCCFF', alpha='0.6', label='Prediction bound')
+        ax_1.set_title('Sales data', fontsize=18)
+        ax_1.set_xlabel('Date', fontsize=18)
+        ax_1.set_ylabel('{}'.format(self.para['target']), fontsize=18)
         ax_1.legend(prop={'size': 15})
         
         if plot_error:
             ax_2 = ax_1.twinx()  # plot error rate using the same x-axis
             ax_2.set_ylabel('Error Rate %', color='orange', fontsize=18)
-            ax_2.plot(dates, data['error_rate'],
+            ax_2.plot(self.test.index, self.error_rate[-len(self.test):],
                         color='orange', label="Error Rate %")
             ax_2.set_ylim(bottom = 0, top = 30)
             ax_2.legend(prop={'size': 15})
         # plt.savefig('figs/model_{}_type_{}'.format(self.dtype, plot_all), 
         #             dpi=400)
         plt.show()
+        
+    
+    
+       
