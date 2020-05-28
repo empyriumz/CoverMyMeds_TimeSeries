@@ -257,7 +257,9 @@ class ARIMA_model(Stats_model):
        
     def get_prediction(self, convert = True):
         """Gather all data, including training, test, prediction, 
-        error rate, etc. into one pandas DataFrame           
+        error rate, etc. into one pandas DataFrame  
+        
+        Note, then d is non-zero, the forecast has to discard the first d-values         
 
         Keyword Arguments:
             convert {bool} -- [If convert is true, the fitted data will 
@@ -267,9 +269,9 @@ class ARIMA_model(Stats_model):
             None
         """        
         # typ='levels'return data with original value instead of differenced data
-        fit_data = self.fit.predict(start = self.train.index[0],
-                                          end = self.test.index[-1],
-                                          exog = self.exog_all, typ='levels')       
+        fit_data = self.fit.predict(start = self.train.index[self.para['d']],
+                                    end = self.test.index[-1],
+                                    exog = self.exog_all, typ='levels')     
 
         fit_data = pd.DataFrame(fit_data, columns=['fit_data'])
         if convert:
@@ -305,6 +307,7 @@ class ARIMA_model(Stats_model):
                     data[col] = (data[col].cumsum()+np.sqrt(self.initial_value))**2
         else:
             pass
+        
         return data 
              
     def forecast(self):
@@ -317,7 +320,11 @@ class ARIMA_model(Stats_model):
             None
         """
         window = len(self.test)
-        forecast_data = self.fit.forecast(window, exog=self.exog_all[-len(self.test):])
+        try:
+            exog = self.exog_all[-len(self.test):]
+        except:
+            exog = None
+        forecast_data = self.fit.forecast(window, exog = exog)
         self.upper_bound = forecast_data[2][:, 1]
         self.lower_bound = forecast_data[2][:, 0]
         self.std_err = forecast_data[1]
@@ -361,7 +368,7 @@ class ARIMA_model(Stats_model):
             ax_1.fill_between(self.test.index, self.combine_data['lower_bound'].dropna(), 
                               self.combine_data['upper_bound'].dropna(),                             
                              color='#ADCCFF', label='Prediction bound')
-        ax_1.set_title('Sales data', fontsize=18)
+        ax_1.set_title('Sales data of {}'.format(self.para['target']), fontsize=18)
         ax_1.set_xlabel('Date', fontsize=18)
         ax_1.set_ylabel('{}'.format(self.para['target']), fontsize=18)
         ax_1.legend(prop={'size': 15})
