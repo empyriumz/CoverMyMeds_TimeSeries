@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from models.models import ARIMA_model
 
 class Backtest_ARIMA():
@@ -14,24 +13,15 @@ class Backtest_ARIMA():
             **kwargs {dict}  --- testing parameters            
         """        
         self.para = kwargs
+        self.data = data
         self.span = self.para['span']
         self.slide = self.para['slide']
-        self.dtype = self.para['dtype']
         self.method = self.para['method']
-        self.target = self.para['target']
-        self.window = self.para['window']
-        self.data = data
-        self.external = self.para['external']
         assert (self.para['p_max'] + self.para['d_max']
                 + self.para['q_max'] !=0), "p, d, q cannot all be zero!"
         self.p_range = range(self.para['p_max']+1)
         self.q_range = range(self.para['q_max']+1)
-        if self.dtype == None:
-            assert self.para['d_max'] > 0, "d must non zero to avoid stability issue!"
-            # make the d_min to be 1 to make data stationary
-            self.d_range = range(1, self.para['d_max']+1)
-        else:
-            self.d_range = range(self.para['d_max']+1)    
+        self.d_range = range(self.para['d_max']+1)
     
     def back_test(self):
         """     
@@ -52,9 +42,9 @@ class Backtest_ARIMA():
             for d in self.d_range:
                 for q in self.q_range:
                     # avoid undefined model
-                    if p + q + d != 0: 
+                    if p + q + d > 0: 
                         i = 0
-                        test_para = {'p':p, 'd':d, 'q':d}
+                        test_para = {'p':p, 'd':d, 'q':q}
                         self.para.update(test_para)
                         params = list(test_para.values())
                         mse_scores = []

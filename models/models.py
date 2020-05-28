@@ -91,6 +91,7 @@ class STS():
         return effect
     
 from statsmodels.tsa.api import ARIMA, SimpleExpSmoothing
+from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.stattools import adfuller, kpss
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
@@ -173,7 +174,7 @@ class Stats_model():
                  
     def fit_model(self):
         try:
-            self.fit = self.model.fit()
+            self.fit = self.model.fit(maxiter=1500)
         except:
             print("Unable to fit with current parameters")
     
@@ -252,7 +253,7 @@ class ARIMA_model(Stats_model):
         self.d = self.para['d']
         self.q = self.para['q']
         self.model = ARIMA(self.train, order=(self.p, self.d, self.q), 
-                           exog = self.exog_train)
+                           exog=self.exog_train)
        
     def get_prediction(self, convert = True):
         """Gather all data, including training, test, prediction, 
@@ -284,8 +285,7 @@ class ARIMA_model(Stats_model):
         if self.dtype == None:
             # call forecast method for obtaining uncertainty estimation
             self.forecast()
-            self.combine_data = pd.concat([self.combine_data, self.upper_bound,
-                                          self.lower_bound, self.std_err], axis=1)
+            self.combine_data = pd.concat([self.combine_data, self.forecast_bound], axis=1)
                    
     def convert_data(self, data):
         """
@@ -321,6 +321,9 @@ class ARIMA_model(Stats_model):
         self.upper_bound = forecast_data[2][:, 1]
         self.lower_bound = forecast_data[2][:, 0]
         self.std_err = forecast_data[1]
+        self.forecast_bound = pd.DataFrame(np.array([self.lower_bound, self.upper_bound, self.std_err]).T, 
+                     columns = ['lower_bound', 'upper_bound', 'std_err'],
+                     index = self.test.index)
             
     def plot_fitted(self):
         """Use built-in method to plot
@@ -355,8 +358,9 @@ class ARIMA_model(Stats_model):
                   label="Fitted and Forecast Values")
         ax_1.plot(date_range, real_data, label="Real Values")
         if self.dtype == None:
-            ax_1.fill_between(self.test.index, self.lower_bound, self.upper_bound,                             
-                            color='#ADCCFF', alpha='0.6', label='Prediction bound')
+            ax_1.fill_between(self.test.index, self.combine_data['lower_bound'].dropna(), 
+                              self.combine_data['upper_bound'].dropna(),                             
+                             color='#ADCCFF', label='Prediction bound')
         ax_1.set_title('Sales data', fontsize=18)
         ax_1.set_xlabel('Date', fontsize=18)
         ax_1.set_ylabel('{}'.format(self.para['target']), fontsize=18)
@@ -374,5 +378,10 @@ class ARIMA_model(Stats_model):
         plt.show()
         
     
+        
+class STL_model(Stats_model):
+    
+    def __init__(self, data, **kwargs):
+        super().__init__(data, **kwargs)
     
        
