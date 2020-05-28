@@ -147,20 +147,15 @@ class Stats_model():
     """Generic time series prediction model template using statsmdodels api
     """    
     def __init__(self, data, **kwargs):
-        #super().__init__(*data, **kwargs)
         """This function initialize with train test split according 
         to the designated datatype and future window
 
         Arguments:
-        data [Data_Pipe object]
-             
-        Keyword Arguments:
-        Raises:
-            TypeError: [only three datatypes are allowed]
+        data [pd.DataFrame] pre-processed data containing all relevant information
         """
         self.para = kwargs
-        self.all_data = data      
-        self.cat_cols = data.cat_cols
+        self.all_data = Data_Pipe(data, **self.para)
+        self.cat_cols = self.all_data.cat_cols
         # set None for dtype when modeling with original values
         self.dtype = self.para['dtype']
         try:
@@ -238,12 +233,12 @@ class ARIMA_model(Stats_model):
         """Build ARIMA model which optionally includes exogenous variables, 
          they can either be categorical variables or sales data of different customers
         Arguments:
-            data {[type]} -- Data_Pipe object
+            data {pd.DataFrame} -- pre-processed data containing all relevant information
         """        
         super().__init__(data, **kwargs)
         try:
-            self.exog_train = data.train[self.para['external']]
-            self.exog_all = data.data[self.para['external']]
+            self.exog_train = self.all_data.train[self.para['external']]
+            self.exog_all = self.all_data.data[self.para['external']]
         except:
             self.exog_train = None
             self.exog_all = None
