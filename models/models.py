@@ -117,8 +117,7 @@ class Data_Pipe():
         self.scale = self.para['scale']
         self.scale_type = self.para['scale_type']
         if self.scale:
-            self.train, self.test = self.data_scaler(self.train, type = self.scale_type), \
-                                    self.data_scaler(self.test, type = self.scale_type)
+            self.train = self.data_scaler(self.train, type = self.scale_type)
 
     def data_scaler(self, data, type = 'max_min'):
         if type == 'max_min':
@@ -128,12 +127,11 @@ class Data_Pipe():
         else:
             raise Exception("Only two scaler available:\
                             'max_min' and 'standard' ")
+        data = data.copy()
         for col in self.numeric_cols:
-            tmp = pd.DataFrame(scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel(), 
-                              columns = [str(col)+'_scaled'], index = data.index)
-            data = data.join(tmp)
-        data_scaled = data.drop(columns = self.numeric_cols)
-        return data_scaled
+            scaled = scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel()
+            data.loc[:, col] = scaled
+        return data
     
     def add_diff(self, data):
         for col in self.sales_cols:
@@ -184,6 +182,14 @@ class Stats_model():
         result = exp_model.fit()
         return result.fittedvalues
     
+    def inverse_scale(self, data):
+        if self.para['scale_type'] == 'max_min':
+            scaler = MinMaxScaler()
+        elif self.para['scale_type'] == 'standard':
+            scaler = StandardScaler()       
+        scaler.fit(self.all_data.data[self.para['target']].to_numpy().reshape(-1, 1))
+        return scaler.inverse_transform(data.reshape(-1, 1))
+                     
     def simple_exp_avg(self, month = 6, smooth_level = 0.2):
         """Exponential averaging the numerical data
 
@@ -265,7 +271,7 @@ class ARIMA_model(Stats_model):
         """Gather all data, including training, test, prediction, 
         error rate, etc. into one pandas DataFrame  
         
-        Note, then d is non-zero, the forecast has to discard the first d-values         
+        Note, when d is non-zero, the forecast has to discard the first d-values         
 
         Keyword Arguments:
             convert {bool} -- [If convert is true, the fitted data will 
@@ -282,11 +288,16 @@ class ARIMA_model(Stats_model):
         fit_data = pd.DataFrame(fit_data, columns=['fit_data'])
         if convert:
             fit_data = self.convert_data(fit_data)
+        fit_data = fit_data.to_numpy()
+        if self.para['scale']:
+            fit_data[:len(self.train)] = self.inverse_scale(fit_data[:len(self.train)])
+        fit_data = pd.Series(fit_data.ravel(), 
+                            name = 'fit_data', index = self.all_data.data.index)
         real_data = pd.Series(self.all_data.data[self.para['target']], name='real_data')
         combine_data = pd.concat([fit_data, real_data], axis = 1)
         diff = combine_data['real_data'] - combine_data['fit_data']
         self.error_rate = pd.Series(100 * np.abs(diff/combine_data['real_data']),
-                                 name = 'error_rate')
+                                    name = 'error_rate')
         self.combine_data = pd.concat([combine_data, self.error_rate], axis=1)
         # mse only includes test errors
         self.mse = np.sum(diff.iloc[-len(self.test):]**2)/len(self.test)
