@@ -116,8 +116,8 @@ class Data_Pipe():
                                 self.data.drop(columns = self.cat_cols).iloc[-self.window:]
         self.scale = self.para['scale']
         self.scale_type = self.para['scale_type']
-        if self.scale:
-            self.train = self.data_scaler(self.train, type = self.scale_type)
+        # if self.scale:
+        #     self.train = self.data_scaler(self.train, type = self.scale_type)
 
     def data_scaler(self, data, type = 'max_min'):
         if type == 'max_min':
@@ -128,7 +128,7 @@ class Data_Pipe():
             raise Exception("Only two scaler available:\
                             'max_min' and 'standard' ")
         data = data.copy()
-        for col in self.numeric_cols:
+        for col in self.sales_cols:
             scaled = scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel()
             data.loc[:, col] = scaled
         return data
@@ -154,18 +154,17 @@ class Stats_model():
         data [pd.DataFrame] pre-processed data containing all relevant information
         """
         self.para = kwargs
-        self.all_data = Data_Pipe(data, **self.para)
-        self.cat_cols = self.all_data.cat_cols
-        # set None for dtype when modeling with original values
+        self.pipe = Data_Pipe(data, **self.para)
+        #self.cat_cols = self.pipe.cat_cols
         self.dtype = self.para['dtype']
         try:
             self.target = self.dtype + str('_') + self.para['target']
         except:
-            # if using original data, dtype will be None
+            # using original data if dtype is None
             self.target = self.para['target']
         # extract initial values for later inverse transform from log_diff and sq_diff 
-        self.initial_value = self.all_data.initial_values[self.para['target']]       
-        self.train, self.test = self.all_data.train[self.target], self.all_data.test[self.target]
+        self.initial_value = self.pipe.initial_values[self.para['target']]       
+        self.train, self.test = self.pipe.train[self.target], self.pipe.test[self.target]
         #self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
         if self.para['smooth']:
             self.train = self.exp_smooth()
@@ -187,7 +186,7 @@ class Stats_model():
             scaler = MinMaxScaler()
         elif self.para['scale_type'] == 'standard':
             scaler = StandardScaler()       
-        scaler.fit(self.all_data.data[self.para['target']].to_numpy().reshape(-1, 1))
+        scaler.fit(self.pipe.data[self.para['target']].to_numpy().reshape(-1, 1))
         return scaler.inverse_transform(data.reshape(-1, 1))
                      
     def simple_exp_avg(self, month = 6, smooth_level = 0.2):
@@ -249,9 +248,12 @@ class ARIMA_model(Stats_model):
             data {pd.DataFrame} -- pre-processed data containing all relevant information
         """        
         super().__init__(data, **kwargs)
+        if self.pipe.scale == True:
+            self.train = self.pipe.data_scaler(self.train, type = self.pipe.scale_type)
+
         try:
-            self.exog_train = self.all_data.train[self.para['external']]
-            self.exog_all = self.all_data.data[self.para['external']]
+            self.exog_train = self.pipe.train[self.para['external']]
+            self.exog_all = self.pipe.data[self.para['external']]
         except:
             self.exog_train = None
             self.exog_all = None
@@ -292,8 +294,8 @@ class ARIMA_model(Stats_model):
         if self.para['scale']:
             fit_data[:len(self.train)] = self.inverse_scale(fit_data[:len(self.train)])
         fit_data = pd.Series(fit_data.ravel(), 
-                            name = 'fit_data', index = self.all_data.data.index)
-        real_data = pd.Series(self.all_data.data[self.para['target']], name='real_data')
+                            name = 'fit_data', index = self.pipe.data.index)
+        real_data = pd.Series(self.pipe.data[self.para['target']], name='real_data')
         combine_data = pd.concat([fit_data, real_data], axis = 1)
         diff = combine_data['real_data'] - combine_data['fit_data']
         self.error_rate = pd.Series(100 * np.abs(diff/combine_data['real_data']),
@@ -368,13 +370,13 @@ class ARIMA_model(Stats_model):
         except:
             self.get_prediction()
         if plot_all: # plot data of all range
-            date_range = self.all_data.data.index
-            real_data = self.all_data.data[self.para['target']]
+            date_range = self.pipe.data.index
+            real_data = self.pipe.data[self.para['target']]
             fit_data = self.combine_data['fit_data']           
         else:
             # plot forecast part only
             date_range = self.test.index
-            real_data = self.all_data.data[self.para['target']].iloc[-len(self.test):]
+            real_data = self.pipe.data[self.para['target']].iloc[-len(self.test):]
             fit_data = self.combine_data['fit_data'].iloc[-len(self.test):]       
         
         _, ax_1 = plt.subplots(figsize=(14, 7))
