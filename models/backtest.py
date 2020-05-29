@@ -19,7 +19,8 @@ class Backtest_ARIMA():
         self.method = self.para['method']
         assert (self.para['p_max'] + self.para['d_max']
                 + self.para['q_max'] !=0), "p, d, q cannot all be zero!"
-        self.p_range = range(self.para['p_max']+1)
+        # special p_range for the current seasonal model
+        self.p_range = range(7, self.para['p_max']+1)
         self.q_range = range(self.para['q_max']+1)
         self.d_range = range(self.para['d_max']+1)
     
@@ -67,7 +68,7 @@ class Backtest_ARIMA():
                                 aic_scores.append(model.fit.aic)
                             except:
                                 print("Unstable model, skip these parameters:\
-                                      {}, {}, {},".format(p, d, q))   
+                                      {}, {}, {},".format(p, q, d))   
                             i += self.slide
                         # recorde the mean score only
                         self.mse_scores.append([params, np.array(mse_scores).mean()])

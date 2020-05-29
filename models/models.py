@@ -91,6 +91,7 @@ class STS():
         return effect
     
 from statsmodels.tsa.api import ARIMA, SimpleExpSmoothing
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.stattools import adfuller, kpss
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
@@ -169,7 +170,7 @@ class Stats_model():
         self.train, self.test = self.all_data.train[self.target], self.all_data.test[self.target]
         #self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
         if self.para['smooth']:
-            self.train = self.exp_avg()
+            self.train = self.exp_smooth()
         self.model = None
                  
     def fit_model(self):
@@ -177,8 +178,13 @@ class Stats_model():
             self.fit = self.model.fit(maxiter=1500)
         except:
             print("Unable to fit with current parameters")
+        
+    def exp_smooth(self):
+        exp_model = ExponentialSmoothing(self.train, seasonal_periods=7, seasonal='mul')
+        result = exp_model.fit()
+        return result.fittedvalues
     
-    def exp_avg(self, month = 6, smooth_level = 0.2):
+    def simple_exp_avg(self, month = 6, smooth_level = 0.2):
         """Exponential averaging the numerical data
 
         Keyword Arguments:
