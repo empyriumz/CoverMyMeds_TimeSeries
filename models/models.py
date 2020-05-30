@@ -124,20 +124,6 @@ class Data_Pipe():
             self.train = self.data_scaler(self.train)           
         # updata numerical columns after adding log and sq diff data
         self.numeric_cols = list(set(self.data.columns.values).difference(set(self.cat_cols)))
-
-    # def data_scaler(self, data, type = 'max_min'):
-    #     if type == 'max_min':
-    #         scaler = MinMaxScaler()
-    #     elif type == 'standard':
-    #         scaler = StandardScaler()
-    #     else:
-    #         raise Exception("Only two scaler available:\
-    #                         'max_min' and 'standard' ")
-    #     data = data.copy()
-    #     for col in self.sales_cols:
-    #         scaled = scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel()
-    #         data.loc[:, col] = scaled
-    #     return data
     
     def data_scaler(self, data, inverse = False):
         if self.scale_type == 'max_min':
@@ -192,14 +178,6 @@ class Data_Pipe():
         Returns:
             [pd.DataFrame] -- Transformed data
         """        
-        # if self.dtype == 'log_diff':
-        #     for col in data.columns:
-        #             data[col] = np.exp(data[col].cumsum()+np.log(initial_value))
-        # elif self.dtype == 'sq_diff':
-        #     for col in data.columns:
-        #             data[col] = (data[col].cumsum()+np.sqrt(initial_value))**2
-        # else:
-        #     pass
         if self.dtype == 'log_diff':
             data = np.exp(data.cumsum()+np.log(initial_value))
         
@@ -359,7 +337,7 @@ class ARIMA_model(Stats_model):
         # first convert the scaled data back 
         if self.para['scale']:
             self.pipe.scaler.fit(self.pipe.train_unscaled.to_numpy().reshape(-1, 1))
-            fit_data = self.pipe.scaler.inverse_transform(fit_data)
+            fit_data = self.pipe.scaler.inverse_transform(fit_data.to_numpy().reshape(-1, 1)).ravel()
             #fit_data[:len(self.train)] = self.pipe.scaler.inverse_transform(fit_data[:len(self.train)])
         # then undo the diff_transform
         # these two operations don't commute
