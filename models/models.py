@@ -91,6 +91,7 @@ class STS():
         return effect
     
 from statsmodels.tsa.api import ARIMA, SimpleExpSmoothing
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.stattools import adfuller, kpss
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
@@ -102,46 +103,91 @@ class Data_Pipe():
         self.data = data
         # sales columns
         self.sales_cols = ['vol_A', 'vol_B', 'vol_C']
-        # keep the initial values for later inverse transform to original data
-        self.initial_values = self.data[self.sales_cols].iloc[0]
         # categorical columns
         self.cat_cols = list(set(self.data.columns.values).difference(set(self.sales_cols)))
-        self.data = self.add_diff(self.data)
-        # updata numerical columns after adding log and sq diff data
-        self.numeric_cols = list(set(self.data.columns.values).difference(set(self.cat_cols)))
         self.window = self.para['window']
-        # for test data, keep numerical variables only
-        self.train, self.test = self.data.iloc[:-self.window], \
-                                self.data.drop(columns = self.cat_cols).iloc[-self.window:]
+        self.target = self.para['target']
+        self.dtype = self.para['dtype']
+        # keep test data untransformed throughout
+        self.train, self.test = self.data[self.target].iloc[:-self.window], \
+                                self.data[self.target].iloc[-self.window:]
+        # keep the initial values for later inverse transform to original data
+        self.initial_values = self.data[self.sales_cols].iloc[0]
+        # log or sq_root transform first, then scaling to avoid numerical errors
+        if self.dtype != None:
+            self.train = self.diff_transform(self.train)
         self.scale = self.para['scale']
         self.scale_type = self.para['scale_type']
+        # make a copy, for inverse scaling later
+        self.train_unscaled = self.train
         if self.scale:
-            self.train, self.test = self.data_scaler(self.train, type = self.scale_type), \
-                                    self.data_scaler(self.test, type = self.scale_type)
-
-    def data_scaler(self, data, type = 'max_min'):
-        if type == 'max_min':
-            scaler = MinMaxScaler()
-        elif type == 'standard':
-            scaler = StandardScaler()
+            self.train = self.data_scaler(self.train)           
+        # updata numerical columns after adding log and sq diff data
+        self.numeric_cols = list(set(self.data.columns.values).difference(set(self.cat_cols)))
+    
+    def data_scaler(self, data, inverse = False):
+        if self.scale_type == 'max_min':
+            self.scaler = MinMaxScaler()
+        elif self.scale_type == 'standard':
+            self.scaler = StandardScaler()
         else:
             raise Exception("Only two scaler available:\
                             'max_min' and 'standard' ")
-        for col in self.numeric_cols:
-            tmp = pd.DataFrame(scaler.fit_transform(data[col].to_numpy().reshape(-1, 1)).ravel(), 
-                              columns = [str(col)+'_scaled'], index = data.index)
-            data = data.join(tmp)
-        data_scaled = data.drop(columns = self.numeric_cols)
-        return data_scaled
-    
-    def add_diff(self, data):
-        for col in self.sales_cols:
-            log_diff = pd.Series(np.log(data[col]).diff(), 
-                             name = 'log_diff_'+str(col)).fillna(value=0)
-            sq_diff = pd.Series(np.sqrt(data[col]).diff(),
-                             name = 'sq_diff_'+str(col)).fillna(value=0)
-            data = pd.concat([data, log_diff, sq_diff], axis = 1)
+        data_ = data.to_numpy().reshape(-1, 1)
+        self.scaler.fit(data_)
+        scaled = self.scaler.transform(data_).ravel()
+        scaled = pd.Series(scaled, name = data.name, index = data.index)
+        return scaled
+      
+    def diff_transform(self, data):
+        """Add 1st order differenced data after log and sq_root transform
+
+        Arguments:
+            data {[pd.Series]} -- [incoming raw sales data]
+
+        Returns:
+            [pd.Series] -- [raw data plus transformed data]
+        """        
+        # for col in self.sales_cols:
+        #     log_diff = pd.Series(np.log(data[col]).diff(), 
+        #                      name = 'log_diff_'+str(col)).fillna(value=0)
+        #     sq_diff = pd.Series(np.sqrt(data[col]).diff(),
+        #                      name = 'sq_diff_'+str(col)).fillna(value=0)
+        #     data = pd.concat([data, log_diff, sq_diff], axis = 1)
+            
+        if self.dtype == 'log_diff':
+            data = pd.Series(np.log(data).diff(), 
+                             name = 'log_diff_'+str(data.name),
+                             index = data.index).fillna(value=0)
+        elif self.dtype == 'sq_diff':
+            data = pd.Series(np.sqrt(data).diff(),
+                             name = 'sq_diff_'+str(data.name),
+                             index = data.index).fillna(value=0)
+        else:
+            pass
+        
         return data
+    
+    def inverse_diff_transform(self, data, initial_value):
+        """
+        helper method for recover log and sq diff transformed 
+        data back to original values 
+        Arguments:
+            data {pd.DataFrame} -- dataframe to be transformed
+
+        Returns:
+            [pd.DataFrame] -- Transformed data
+        """        
+        if self.dtype == 'log_diff':
+            data = np.exp(data.cumsum()+np.log(initial_value))
+        
+        elif self.dtype == 'sq_diff':
+            data = (data.cumsum()+np.sqrt(initial_value))**2
+        
+        else:
+            pass
+        
+        return data 
             
                 
 class Stats_model():
@@ -155,21 +201,19 @@ class Stats_model():
         data [pd.DataFrame] pre-processed data containing all relevant information
         """
         self.para = kwargs
-        self.all_data = Data_Pipe(data, **self.para)
-        self.cat_cols = self.all_data.cat_cols
-        # set None for dtype when modeling with original values
-        self.dtype = self.para['dtype']
+        self.pipe = Data_Pipe(data, **self.para)
+        self.dtype = self.pipe.dtype
+        self.external = self.para['external']
         try:
             self.target = self.dtype + str('_') + self.para['target']
         except:
-            # if using original data, dtype will be None
+            # using original data if dtype is None
             self.target = self.para['target']
-        # extract initial values for later inverse transform from log_diff and sq_diff 
-        self.initial_value = self.all_data.initial_values[self.para['target']]       
-        self.train, self.test = self.all_data.train[self.target], self.all_data.test[self.target]
-        #self.numeric_cols = list(set(self.train.columns.values).difference(set(self.cat_cols)))
+        # extract initial values for later inverse transform from log_diff and sq_diff
+        self.initial_value = self.pipe.initial_values[self.para['target']]       
+        self.train, self.test = self.pipe.train, self.pipe.test
         if self.para['smooth']:
-            self.train = self.exp_avg()
+            self.train = self.exp_smooth()
         self.model = None
                  
     def fit_model(self):
@@ -177,8 +221,13 @@ class Stats_model():
             self.fit = self.model.fit(maxiter=1500)
         except:
             print("Unable to fit with current parameters")
-    
-    def exp_avg(self, month = 6, smooth_level = 0.2):
+        
+    def exp_smooth(self):
+        exp_model = ExponentialSmoothing(self.train, seasonal_periods=7, seasonal='mul')
+        result = exp_model.fit()
+        return result.fittedvalues
+                        
+    def simple_exp_avg(self, month = 6, smooth_level = 0.2):
         """Exponential averaging the numerical data
 
         Keyword Arguments:
@@ -237,9 +286,20 @@ class ARIMA_model(Stats_model):
             data {pd.DataFrame} -- pre-processed data containing all relevant information
         """        
         super().__init__(data, **kwargs)
-        try:
-            self.exog_train = self.all_data.train[self.para['external']]
-            self.exog_all = self.all_data.data[self.para['external']]
+        
+        try:  
+            self.exog_all = self.pipe.data[self.external]
+            self.exog_train = self.exog_all[:len(self.train)]
+            # if external data belongs to sales data, and the training set gets scaled
+            # and diff transformed, then do the same for external set as well
+            # Note two transformations don't commute
+            if self.external in self.pipe.sales_cols:
+                if self.para['scale']:               
+                    self.exog_all = self.pipe.data_scaler(self.pipe.diff_transform(self.exog_all))
+                    self.exog_train = self.exog_all[:len(self.train)]
+                else: # diff_transform does nothing when dtype == None
+                    self.exog_all = self.pipe.diff_transform(self.exog_all)
+                    self.exog_train = self.exog_all[:len(self.train)]
         except:
             self.exog_train = None
             self.exog_all = None
@@ -259,7 +319,7 @@ class ARIMA_model(Stats_model):
         """Gather all data, including training, test, prediction, 
         error rate, etc. into one pandas DataFrame  
         
-        Note, then d is non-zero, the forecast has to discard the first d-values         
+        Note, when d is non-zero, the forecast has to discard the first d-values         
 
         Keyword Arguments:
             convert {bool} -- [If convert is true, the fitted data will 
@@ -273,14 +333,24 @@ class ARIMA_model(Stats_model):
                                     end = self.test.index[-1],
                                     exog = self.exog_all, typ='levels')     
 
-        fit_data = pd.DataFrame(fit_data, columns=['fit_data'])
+        fit_data = pd.Series(fit_data, name = 'fit_data')
+        # first convert the scaled data back 
+        if self.para['scale']:
+            self.pipe.scaler.fit(self.pipe.train_unscaled.to_numpy().reshape(-1, 1))
+            fit_data = self.pipe.scaler.inverse_transform(fit_data.to_numpy().reshape(-1, 1)).ravel()
+            #fit_data[:len(self.train)] = self.pipe.scaler.inverse_transform(fit_data[:len(self.train)])
+        # then undo the diff_transform
+        # these two operations don't commute
         if convert:
-            fit_data = self.convert_data(fit_data)
-        real_data = pd.Series(self.all_data.data[self.para['target']], name='real_data')
+            fit_data = self.pipe.inverse_diff_transform(fit_data, self.initial_value)
+        
+        fit_data = pd.Series(fit_data, 
+                            name = 'fit_data', index = self.pipe.data.index)
+        real_data = pd.Series(self.pipe.data[self.para['target']], name='real_data')
         combine_data = pd.concat([fit_data, real_data], axis = 1)
         diff = combine_data['real_data'] - combine_data['fit_data']
         self.error_rate = pd.Series(100 * np.abs(diff/combine_data['real_data']),
-                                 name = 'error_rate')
+                                    name = 'error_rate')
         self.combine_data = pd.concat([combine_data, self.error_rate], axis=1)
         # mse only includes test errors
         self.mse = np.sum(diff.iloc[-len(self.test):]**2)/len(self.test)
@@ -288,28 +358,7 @@ class ARIMA_model(Stats_model):
             # call forecast method for obtaining uncertainty estimation
             self.forecast()
             self.combine_data = pd.concat([self.combine_data, self.forecast_bound], axis=1)
-                   
-    def convert_data(self, data):
-        """
-        helper method for recover log and sq diff transformed 
-        data back to original values 
-        Arguments:
-            data {pd.DataFrame} -- dataframe to be transformed
-
-        Returns:
-            [pd.DataFrame] -- Transformed data
-        """        
-        if self.dtype == 'log_diff':
-            for col in data.columns:
-                    data[col] = np.exp(data[col].cumsum()+np.log(self.initial_value))
-        elif self.dtype == 'sq_diff':
-            for col in data.columns:
-                    data[col] = (data[col].cumsum()+np.sqrt(self.initial_value))**2
-        else:
-            pass
-        
-        return data 
-             
+                                
     def forecast(self):
         """Make forecast using fitted model.
         The forecasting window matches the test window.
@@ -351,13 +400,13 @@ class ARIMA_model(Stats_model):
         except:
             self.get_prediction()
         if plot_all: # plot data of all range
-            date_range = self.all_data.data.index
-            real_data = self.all_data.data[self.para['target']]
+            date_range = self.pipe.data.index
+            real_data = self.pipe.data[self.para['target']]
             fit_data = self.combine_data['fit_data']           
         else:
             # plot forecast part only
             date_range = self.test.index
-            real_data = self.all_data.data[self.para['target']].iloc[-len(self.test):]
+            real_data = self.pipe.data[self.para['target']].iloc[-len(self.test):]
             fit_data = self.combine_data['fit_data'].iloc[-len(self.test):]       
         
         _, ax_1 = plt.subplots(figsize=(14, 7))
@@ -390,5 +439,4 @@ class STL_model(Stats_model):
     
     def __init__(self, data, **kwargs):
         super().__init__(data, **kwargs)
-    
-       
+  
