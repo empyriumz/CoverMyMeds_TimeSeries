@@ -1,5 +1,5 @@
 # Introduction
-<img src="https://raw.githubusercontent.com/empyriumz/CoverMyMeds_TimeSeries/master/figs/CoverMyMeds-Logo.png" alt="logo" style="zoom:40%;" />
+<img src="https://raw.githubusercontent.com/empyriumz/CoverMyMeds_TimeSeries/master/figs/CoverMyMeds-Logo.png" alt="logo" style="zoom:10%;" />
 
 [The Erdős Institute](https://www.erdosinstitute.org/) 2020 Bootcamp Team Project
 
