@@ -1,95 +1,7 @@
 import numpy as np
-import tensorflow as tf
 import pandas as pd
-import tensorflow_probability as tfp
-from tensorflow_probability import distributions as tfd
-from tensorflow_probability import sts
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
-class STS():
-    def __init__(self, obs, external_obs = None):
-        #super().__init__()
-        self.obs = obs
-        self.external_obs = external_obs
-        self.day_of_week = None
-        self.month_of_yr = None
-        self.external = None
-        self.residue = None
-        self.model = None
-                
-    def build_model(self, day = True, month = True, res = True, ext = False):
-        if day:
-            self.day_of_week = self.day_of_week_effect()
-        if month:
-            self.month_of_yr = self.month_of_yr_effect()
-        if ext:
-            self.external = self.external_effect()
-        if res:
-            self.residue = self.residue_effect()
-        
-        # get rid of None in the list
-        list_of_effects = [self.day_of_week, self.month_of_yr, 
-                            self.external, self.residue]
-        
-        list_of_effects = list(filter(None.__ne__, list_of_effects))
-
-        self.model = sts.Sum(components=list_of_effects,
-                            observed_time_series=self.obs)
-    
-    #@tf.function(experimental_compile=True)
-    #@tf.function
-    def train(self, num_steps = 100, lr = 0.1):
-        self.lr = lr
-        self.num_steps = num_steps
-        #self.optimizer = optimizer
-        self.surrogate_posterior = self.variational_posterior()
-        self.elbo_loss_curve = \
-        tfp.vi.fit_surrogate_posterior(
-                    target_log_prob_fn = \
-                    self.model.joint_log_prob(observed_time_series = self.obs),
-                    surrogate_posterior = self.surrogate_posterior,
-                    optimizer = tf.optimizers.Adam(learning_rate = self.lr),
-                    num_steps = self.num_steps)
-    
-        return self.elbo_loss_curve
-    
-    def variational_posterior(self):
-        return tfp.sts.build_factored_surrogate_posterior(model = self.model)
-            
-    def day_of_week_effect(self):
-        effect = sts.Seasonal(
-                        num_seasons=7, num_steps_per_season=1,
-                        observed_time_series=self.obs,
-                        name='day_of_week_effect')
-        
-        return effect
-           
-    def month_of_yr_effect(self):
-        effect = tfp.sts.Seasonal(
-        num_seasons=12,
-        num_steps_per_season=[31, 28, 31, 30, 30, 31, 31, 31, 30, 31, 30, 31],
-        #drift_scale_prior=tfd.LogNormal(loc=-1., scale=0.1),
-        #initial_effect_prior=tfd.Normal(loc=0., scale=5.),
-        name='month_of_year')
-
-        return effect
-       
-    def external_effect(self):
-        effect = sts.LinearRegression(
-                design_matrix=tf.reshape(self.external_obs 
-                                         - np.mean(self.external_obs),
-                (-1, 1)), name='external_effect')
-        
-        return effect
-    
-    def residue_effect(self, order = 1):
-        effect = sts.Autoregressive(
-                order=order, observed_time_series=self.obs,
-                name='autoregressive_residue')
-        
-        return effect
-    
 from statsmodels.tsa.api import ARIMA, SimpleExpSmoothing
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.seasonal import STL
@@ -416,10 +328,10 @@ class ARIMA_model(Stats_model):
         if self.dtype == None:
             ax_1.fill_between(self.test.index, self.combine_data['lower_bound'].dropna(), 
                               self.combine_data['upper_bound'].dropna(),                             
-                             color='#ADCCFF', label='Prediction bound')
-        ax_1.set_title('Sales data of {}'.format(self.para['target']), fontsize=18)
+                             color='#ADCCFF', label='95% Confidence Interval')
+        ax_1.set_title('Sales data of {}'.format(self.para['target'][-1]), fontsize=18)
         ax_1.set_xlabel('Date', fontsize=18)
-        ax_1.set_ylabel('{}'.format(self.para['target']), fontsize=18)
+        ax_1.set_ylabel('Volumes', fontsize=18)
         ax_1.legend(prop={'size': 15})
         
         if plot_error:
@@ -429,14 +341,109 @@ class ARIMA_model(Stats_model):
                         color='orange', label="Error Rate %")
             ax_2.set_ylim(bottom = 0, top = 30)
             ax_2.legend(prop={'size': 15})
-        # plt.savefig('figs/model_{}_type_{}'.format(self.dtype, plot_all), 
-        #             dpi=400)
+        plt.savefig('figs/{}_days_{}_error_{:.2f}_plot_all_{}.png'.format(
+                len(self.test), self.para['target'][-1], 
+                self.error_rate[-len(self.test):].mean(),plot_all), dpi=400)
         plt.show()
         
-    
+   
         
 class STL_model(Stats_model):
-    
+    """Seasonal decomposition
+
+    Arguments:
+        Stats_model {parent class object}
+    """    
     def __init__(self, data, **kwargs):
         super().__init__(data, **kwargs)
-  
+        pass
+ 
+import tensorflow as tf
+import tensorflow_probability as tfp
+from tensorflow_probability import distributions as tfd
+from tensorflow_probability import sts
+import matplotlib.dates as mdates 
+class STS():
+    """Modeling using Structure Time Series with tensorflow activity
+    """    
+    def __init__(self, obs, external_obs = None):
+        #super().__init__()
+        self.obs = obs
+        self.external_obs = external_obs
+        self.day_of_week = None
+        self.month_of_yr = None
+        self.external = None
+        self.residue = None
+        self.model = None
+                
+    def build_model(self, day = True, month = True, res = True, ext = False):
+        if day:
+            self.day_of_week = self.day_of_week_effect()
+        if month:
+            self.month_of_yr = self.month_of_yr_effect()
+        if ext:
+            self.external = self.external_effect()
+        if res:
+            self.residue = self.residue_effect()
+        
+        # get rid of None in the list
+        list_of_effects = [self.day_of_week, self.month_of_yr, 
+                            self.external, self.residue]
+        
+        list_of_effects = list(filter(None.__ne__, list_of_effects))
+
+        self.model = sts.Sum(components=list_of_effects,
+                            observed_time_series=self.obs)
+    
+    #@tf.function(experimental_compile=True)
+    #@tf.function
+    def train(self, num_steps = 100, lr = 0.1):
+        self.lr = lr
+        self.num_steps = num_steps
+        #self.optimizer = optimizer
+        self.surrogate_posterior = self.variational_posterior()
+        self.elbo_loss_curve = \
+        tfp.vi.fit_surrogate_posterior(
+                    target_log_prob_fn = \
+                    self.model.joint_log_prob(observed_time_series = self.obs),
+                    surrogate_posterior = self.surrogate_posterior,
+                    optimizer = tf.optimizers.Adam(learning_rate = self.lr),
+                    num_steps = self.num_steps)
+    
+        return self.elbo_loss_curve
+    
+    def variational_posterior(self):
+        return tfp.sts.build_factored_surrogate_posterior(model = self.model)
+            
+    def day_of_week_effect(self):
+        effect = sts.Seasonal(
+                        num_seasons=7, num_steps_per_season=1,
+                        observed_time_series=self.obs,
+                        name='day_of_week_effect')
+        
+        return effect
+           
+    def month_of_yr_effect(self):
+        effect = tfp.sts.Seasonal(
+        num_seasons=12,
+        num_steps_per_season=[31, 28, 31, 30, 30, 31, 31, 31, 30, 31, 30, 31],
+        #drift_scale_prior=tfd.LogNormal(loc=-1., scale=0.1),
+        #initial_effect_prior=tfd.Normal(loc=0., scale=5.),
+        name='month_of_year')
+
+        return effect
+       
+    def external_effect(self):
+        effect = sts.LinearRegression(
+                design_matrix=tf.reshape(self.external_obs 
+                                         - np.mean(self.external_obs),
+                (-1, 1)), name='external_effect')
+        
+        return effect
+    
+    def residue_effect(self, order = 1):
+        effect = sts.Autoregressive(
+                order=order, observed_time_series=self.obs,
+                name='autoregressive_residue')
+        
+        return effect
